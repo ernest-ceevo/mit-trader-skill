@@ -1,4 +1,5 @@
-"""Free daily data, no API keys: yfinance for stocks/ETFs, ccxt public OHLCV for crypto."""
+"""Daily data: Alpaca (env keys) or yfinance for stocks/ETFs, ccxt public OHLCV for crypto."""
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -10,6 +11,41 @@ from .common import is_crypto
 
 def _cache_path(cfg, symbol):
     return cfg["_home"] / "cache" / (symbol.replace("/", "-") + ".csv")
+
+
+def _fetch_alpaca(symbol, years):
+    """Daily OHLCV from Alpaca Data API. Keys come from ALPACA_API_KEY / ALPACA_SECRET_KEY env vars."""
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
+
+    key = os.environ.get("ALPACA_API_KEY")
+    secret = os.environ.get("ALPACA_SECRET_KEY")
+    if not key or not secret:
+        raise RuntimeError("未设置 ALPACA_API_KEY / ALPACA_SECRET_KEY 环境变量")
+    client = StockHistoricalDataClient(key, secret)
+    start = datetime.now(timezone.utc) - timedelta(days=365 * years + 7)
+    req = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=TimeFrame.Day,
+        start=start,
+        limit=10000,
+        feed="sip",  # 付费订阅是 sip；免费会退回 iex
+    )
+    bars = client.get_stock_bars(req)
+    df = bars.df if hasattr(bars, "df") else bars
+    if df is None or (hasattr(df, "empty") and df.empty):
+        raise RuntimeError(f"Alpaca 没有返回 {symbol} 的数据")
+    if isinstance(df.index, pd.MultiIndex):
+        if symbol not in df.index.get_level_values(0):
+            raise RuntimeError(f"Alpaca 没有返回 {symbol} 的数据")
+        df = df.xs(symbol, level=0)
+    df = df.rename(columns=str.lower)[["open", "high", "low", "close", "volume"]]
+    df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
+    df = df[~df.index.duplicated(keep="last")].sort_index()
+    # 去掉还没收盘的当天 K 线
+    today = pd.Timestamp(datetime.now(timezone.utc).date())
+    return df[df.index < today]
 
 
 def _fetch_yf(symbol, years):
@@ -59,9 +95,15 @@ def get_prices(cfg, symbol, refresh_hours=12):
     if path.exists() and (time.time() - path.stat().st_mtime) < refresh_hours * 3600:
         return pd.read_csv(path, index_col=0, parse_dates=True)
     years = cfg["data"]["years"]
+    source = cfg["data"].get("source")
     try:
         if is_crypto(symbol):
             df = _fetch_ccxt(symbol, years, cfg["data"]["crypto_exchange"])
+        elif source == "alpaca":
+            try:
+                df = _fetch_alpaca(symbol, years)
+            except Exception:  # Alpaca 失败退回 yfinance
+                df = _fetch_yf(symbol, years)
         else:
             df = _fetch_yf(symbol, years)
         df = df.dropna()

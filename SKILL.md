@@ -20,7 +20,7 @@ description: 基于 MIT OpenCourseWare 18.S096《Topics in Mathematics with Appl
 3 跑一遍自检（不联网，用合成的测试市场）：`.venv/bin/python tests/test_smoke.py`
 4 告诉用户装好了，并提醒：先打开 `config.yaml` 看一眼标的和风控上限。
 
-数据全部免费、不要 API key：股票/ETF 用 yfinance，加密用 ccxt 公共行情（默认 OKX，在 config.yaml 的 `crypto_exchange` 改）。
+数据：股票/ETF 默认用 Alpaca 行情（需设置 `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` 环境变量，失败自动退回 yfinance），加密用 ccxt 公共行情（默认 OKX，在 config.yaml 的 `crypto_exchange` 改）。
 
 下面的命令都在 skill 目录里运行，`PY` 指 `.venv/bin/python`（没建虚拟环境就用 `python3`）。
 

@@ -5,3 +5,4 @@ pyyaml>=6.0
 arch>=7.0
 yfinance>=0.2.40
 ccxt>=4.3
+alpaca-py>=0.36
