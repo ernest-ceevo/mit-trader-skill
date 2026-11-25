@@ -89,6 +89,37 @@ def _fetch_ccxt(symbol, years, exchange):
     return df[df.index < today]
 
 
+def _shared_adapter_module():
+    """Load the shared market-data adapter (see /mnt/shared/hermes/market-data-adapter/README.md) when MARKET_DATA_ADAPTER is set."""
+    path = os.environ.get("MARKET_DATA_ADAPTER", "").strip()
+    if not path or not os.path.exists(path):
+        return None
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("shared_market_data_adapter", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _fetch_adapter(symbol, years):
+    """Daily OHLCV via the shared market-data adapter (Alpaca fetch + machine-wide SQLite cache)."""
+    mod = _shared_adapter_module()
+    if mod is None:
+        raise RuntimeError("MARKET_DATA_ADAPTER 未设置或路径无效")
+    md = mod.MarketData()
+    rows = md.daily_bars(symbol, days=min(int(years * 252) + 60, 10000))
+    if not rows:
+        raise RuntimeError(md.last_error or f"adapter 没有返回 {symbol} 的数据")
+    df = pd.DataFrame(rows)
+    df.index = pd.to_datetime(df.pop("date"))
+    df = df.rename(columns={"adj_close": "adjclose"})
+    df.index.name = ""
+    return df[~df.index.duplicated(keep="last")].sort_index()[
+        ["open", "high", "low", "close", "volume"]
+    ]
+
+
 def get_prices(cfg, symbol, refresh_hours=12):
     """Return daily OHLCV DataFrame. Uses a local CSV cache; refetches when older than refresh_hours."""
     path = _cache_path(cfg, symbol)
@@ -99,6 +130,8 @@ def get_prices(cfg, symbol, refresh_hours=12):
     try:
         if is_crypto(symbol):
             df = _fetch_ccxt(symbol, years, cfg["data"]["crypto_exchange"])
+        elif os.environ.get("MARKET_DATA_ADAPTER", "").strip():  # 共享适配器优先（自带机器级缓存）
+            df = _fetch_adapter(symbol, years)
         elif source == "alpaca":
             try:
                 df = _fetch_alpaca(symbol, years)
